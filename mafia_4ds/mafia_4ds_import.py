@@ -294,7 +294,90 @@ class Mafia4ds_Importer:
         mesh.hide_set(True)
         mesh.hide_render = True
         mesh.select_set(False)
+    def DeserializeBillboard(self,reader, materials, mesh, meshData, meshProps):
+        meshProps.Axis     = struct.unpack("I", reader.read(4))[0]
+        meshProps.AxisMode = struct.unpack("B", reader.read(1))[0]
+        
+    def DeserializePortal(self, reader, mesh, meshData):
+        bMesh              = bmesh.new()
+        
+        vertices           = bMesh.verts
+        
+        vertexCount        = struct.unpack("B", reader.read(1))[0]
+        flags = struct.unpack("I", reader.read(4))[0]
+        nearRange = struct.unpack("f", reader.read(4))[0]
+        farRange = struct.unpack("f", reader.read(4))[0]
+        normal = struct.unpack("fff", reader.read(4 * 3))
+        dotp = struct.unpack("f", reader.read(4))[0]
+        
+        for vertexIdx in range(vertexCount):
+            position       = struct.unpack("fff", reader.read(4 * 3))
+            vertex         = vertices.new()
+            vertex.co      = [ position[0], position[2], position[1] ]
+            
+        vertices.ensure_lookup_table()
+        
+        faces =  bMesh.faces
+        faces.new([ vertices[0], vertices[1],  vertices[2]])
+        faces.new([ vertices[0], vertices[2],  vertices[3]])
+        for f in bMesh.faces:
+            if f.normal != normal:
+                bmesh.ops.reverse_faces(bMesh, faces = [f], )
+        
+        bMesh.to_mesh(meshData)
+        del bMesh
     
+    def DeserializeSector(self, reader, mesh, meshData):
+        flags1  = struct.unpack("I", reader.read(4))
+        flags2  = struct.unpack("I", reader.read(4))
+        
+        bMesh              = bmesh.new()
+        
+        # vertices
+        vertices           = bMesh.verts
+        uvs                = []
+        vertexCount        = struct.unpack("I", reader.read(4))[0]
+        faceCount          = struct.unpack("I", reader.read(4))[0]
+        
+        for vertexIdx in range(vertexCount):
+            position       = struct.unpack("fff", reader.read(4 * 3))
+            vertex         = vertices.new()
+            vertex.co      = [ position[0], position[2], position[1] ]
+            uvs.append([ 0, 0 ])
+        
+        vertices.ensure_lookup_table()
+        
+        # faces
+        faces               = bMesh.faces
+        uvLayer             = bMesh.loops.layers.uv.new()
+        
+
+        for faceIdx in range(faceCount):
+            vertexIdxs             = struct.unpack("HHH", reader.read(2 * 3))
+            vertexIdxsSwap         = [ vertexIdxs[0], vertexIdxs[2], vertexIdxs[1] ]
+            try:
+                face           = faces.new([ vertices[vertexIdxsSwap[0]], vertices[vertexIdxsSwap[1]], vertices[vertexIdxsSwap[2]] ])
+            except:
+                ShowWarning("Mesh {} has duplicate face [ {}, {}, {} ]!".format(mesh.name, vertexIdxsSwap[0], vertexIdxsSwap[1], vertexIdxsSwap[2]))
+                
+        bMesh.to_mesh(meshData)
+        del bMesh
+        
+        min = struct.unpack("fff", reader.read(4 * 3))
+        max = struct.unpack("fff", reader.read(4 * 3))
+        numPortals = struct.unpack("B", reader.read(1))[0]
+        portalIdx = 0
+        meshName = mesh.name
+        
+        for portal in range(numPortals):
+            name           = "{}_port{}".format(meshName, portalIdx)
+            meshData       = bpy.data.meshes.new(name)
+            newMesh        = bpy.data.objects.new(name, meshData)
+            mesh           = newMesh
+            meshProps      = mesh.MeshProps
+            bpy.context.collection.objects.link(mesh)
+            self.DeserializePortal(reader, mesh, meshData)
+            portalIdx += 1
     
     def DeserializeMesh(self, reader, materials, meshes):
         type        = struct.unpack("B", reader.read(1))[0]
@@ -313,15 +396,6 @@ class Mafia4ds_Importer:
         cullingFlags         = struct.unpack("B", reader.read(1))[0]
         name                 = self.DeserializeString(reader)
         parameters           = self.DeserializeString(reader)
-        
-        if type == 0x01:
-            if visualType != 0x00:
-                ShowError("Unsupported visual type {} of mesh {}!".format(visualType, name))
-                return False
-        
-        elif type != 0x06:
-            ShowError("Unsupported mesh type {} of mesh {}!".format(type, name))
-            return False
         
         meshData             = bpy.data.meshes.new(name)
         mesh                 = bpy.data.objects.new(name, meshData)
@@ -346,10 +420,25 @@ class Mafia4ds_Importer:
         if type == 0x01:
             if visualType == 0x00:
                 self.DeserializeVisual(reader, materials, mesh, meshData, meshProps)
-        
+                
+            elif visualType == 0x04:
+                self.DeserializeVisual(reader, materials, mesh, meshData, meshProps)
+                self.DeserializeBillboard(reader, materials, mesh, meshData, meshProps)
+                
+            else:
+                self.ShowError("Unsupported visual type {}!".format(visualType))
+                return False
+            
         elif type == 0x06:
             self.DeserializeDummy(reader, mesh, meshData)
-        
+            
+        elif type == 0x05:
+            self.DeserializeSector(reader, mesh, meshData)
+            
+        else:
+            self.ShowError("Unsupported mesh type {}!".format(type))
+            return False
+            
         return True
     
     
