@@ -8,7 +8,7 @@ class Mafia4ds_GlobalMeshProperties(types.PropertyGroup):
         name = "Type",
         items = [
             ("0x01", "Visual", ""),
-            #("0x05", "Sector", ""),
+            ("0x05", "Sector", ""),
             ("0x06", "Dummy",  ""),
             #("0x07", "Target", ""),
             #("0x0a", "Joint",  "")
@@ -21,7 +21,7 @@ class Mafia4ds_GlobalMeshProperties(types.PropertyGroup):
             ("0x00", "Mesh",        ""),
             #("0x02", "SingleMesh",  ""),
             #("0x03", "SingleMorph", ""),
-            #("0x04", "Billboard",   ""),
+            ("0x04", "Billboard",   ""),
             #("0x05", "Morph",       ""),
             #("0x06", "Glow",        ""),
             #("0x08", "Mirror",      "")
@@ -33,7 +33,10 @@ class Mafia4ds_GlobalMeshProperties(types.PropertyGroup):
     CullingFlags : props.IntProperty   (name = "Culling Flags", default = 0x09)
     InstanceIdx  : props.IntProperty   (name = "Instance Idx", default = 0)
     LodRatio     : props.FloatProperty (name = "Lod Ratio", default = 0.0)
-
+    RotationAxis : props.IntProperty   (name = "Rotation Axis", default = 0, min = 0, max = 2)
+    RotationMode : props.BoolProperty  (name = "Rotation Mode", default = True)
+    flags1       : props.IntProperty   (name = "Flags 1", default = 2049)
+    flags2       : props.IntProperty   (name = "Flags 2", default = 0)
 
 class Mafia4ds_MeshPropertiesPanel(types.Panel):
     "Mafia 4ds Mesh Properties"
@@ -63,7 +66,14 @@ class Mafia4ds_MeshPropertiesPanel(types.Panel):
         if meshProps.Type == "0x01":
             layout.prop(meshProps, "InstanceIdx")
             layout.prop(meshProps, "LodRatio")
-
+            
+        if meshProps.VisualType == "0x04":
+            layout.prop(meshProps, "RotationAxis")
+            layout.prop(meshProps, "RotationMode")
+            
+        if meshProps.Type == "0x05":
+            layout.prop(meshProps, "flags1")
+            layout.prop(meshProps, "flags2")
 
 def register():
     utils.register_class(Mafia4ds_GlobalMeshProperties)
