@@ -298,15 +298,17 @@ class Mafia4ds_Importer:
         meshProps.Axis     = struct.unpack("I", reader.read(4))[0]
         meshProps.AxisMode = struct.unpack("B", reader.read(1))[0]
         
-    def DeserializePortal(self, reader, mesh, meshData):
+    def DeserializePortal(self, reader, mesh, meshData, meshProps):
         bMesh              = bmesh.new()
         
         vertices           = bMesh.verts
         
         vertexCount        = struct.unpack("B", reader.read(1))[0]
-        flags = struct.unpack("I", reader.read(4))[0]
+        meshProps.portalflags = struct.unpack("I", reader.read(4))[0]
+        #???
         nearRange = struct.unpack("f", reader.read(4))[0]
         farRange = struct.unpack("f", reader.read(4))[0]
+        #???
         normal = struct.unpack("fff", reader.read(4 * 3))
         dotp = struct.unpack("f", reader.read(4))[0]
         
@@ -318,18 +320,17 @@ class Mafia4ds_Importer:
         vertices.ensure_lookup_table()
         
         faces =  bMesh.faces
-        faces.new([ vertices[0], vertices[1],  vertices[2]])
-        faces.new([ vertices[0], vertices[2],  vertices[3]])
-        for f in bMesh.faces:
-            if f.normal != normal:
-                bmesh.ops.reverse_faces(bMesh, faces = [f], )
+        portalv = []
+        for v in vertices:
+            portalv.append(v) 
+        faces.new(portalv)
         
         bMesh.to_mesh(meshData)
         del bMesh
     
-    def DeserializeSector(self, reader, mesh, meshData):
-        flags1  = struct.unpack("I", reader.read(4))
-        flags2  = struct.unpack("I", reader.read(4))
+    def DeserializeSector(self, reader, mesh, meshData, meshProps):
+        meshProps.flags1  = struct.unpack("I", reader.read(4))[0]
+        meshProps.flags2  = struct.unpack("I", reader.read(4))[0]
         
         bMesh              = bmesh.new()
         
@@ -376,7 +377,7 @@ class Mafia4ds_Importer:
             mesh           = newMesh
             meshProps      = mesh.MeshProps
             bpy.context.collection.objects.link(mesh)
-            self.DeserializePortal(reader, mesh, meshData)
+            self.DeserializePortal(reader, mesh, meshData, meshProps)
             portalIdx += 1
     
     def DeserializeMesh(self, reader, materials, meshes):
@@ -433,7 +434,7 @@ class Mafia4ds_Importer:
             self.DeserializeDummy(reader, mesh, meshData)
             
         elif type == 0x05:
-            self.DeserializeSector(reader, mesh, meshData)
+            self.DeserializeSector(reader, mesh, meshData, meshProps)
             
         else:
             self.ShowError("Unsupported mesh type {}!".format(type))
