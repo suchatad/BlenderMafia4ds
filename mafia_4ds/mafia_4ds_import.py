@@ -196,7 +196,7 @@ class Mafia4ds_Importer:
         meshProps.InstanceIdx = instanceIdx
         
         if instanceIdx > 0:
-            return;
+            return
         
         meshName = mesh.name
         lodCount = struct.unpack("B", reader.read(1))[0]

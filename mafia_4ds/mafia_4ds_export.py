@@ -295,7 +295,7 @@ class Mafia4ds_Exporter:
     
     
     def SerializeFile(self, writer):
-        writer.write("4DS\0".encode());      # fourcc
+        writer.write("4DS\0".encode())      # fourcc
         writer.write(struct.pack("H", 0x1d)) # mafia 4ds version
         
         scene = types.Scene
