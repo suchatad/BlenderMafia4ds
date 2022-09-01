@@ -427,7 +427,7 @@ class Mafia4ds_Importer:
                 self.DeserializeBillboard(reader, materials, mesh, meshData, meshProps)
                 
             else:
-                self.ShowError("Unsupported visual type {}!".format(visualType))
+                ShowError("Unsupported visual type {}!".format(visualType))
                 return False
             
         elif type == 0x06:
@@ -437,7 +437,7 @@ class Mafia4ds_Importer:
             self.DeserializeSector(reader, mesh, meshData, meshProps)
             
         else:
-            self.ShowError("Unsupported mesh type {}!".format(type))
+            ShowError("Unsupported mesh type {}!".format(type))
             return False
             
         return True
