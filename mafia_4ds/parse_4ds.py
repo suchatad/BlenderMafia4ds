@@ -98,7 +98,7 @@ class Material:
         self.diffuse_color = None
         self.emission_color = None
         self.alpha = None
-        self.reflection = None
+        self.metallic = None
         self.filename = None
 
     def read(self, reader):
@@ -112,10 +112,10 @@ class Material:
 
         # env mapping
         if self.matProps.UseEnvTexture:
-            self.reflection = read_float(reader)  # check again
+            self.metallic = read_float(reader)
             self.matProps.envTexture = read_string(reader).lower()
         else:
-            self.reflection = 0.0
+            self.metallic = 0.0
 
         # diffuse mapping
         self.filename = read_string(reader).lower()
