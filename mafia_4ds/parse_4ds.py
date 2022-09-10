@@ -56,9 +56,11 @@ blender_axes = True
 
 def fix_axes(ntlet):
     n = len(ntlet)
-    assert n == 3 or n == 4
+    assert n == 2 or n == 3 or n == 4
 
-    if n == 3:
+    if n == 2:
+        return ntlet[0], -ntlet[1]
+    elif n == 3:
         return ntlet[0], ntlet[2], ntlet[1]
     else:
         return ntlet[0], ntlet[1], ntlet[3], ntlet[2]
@@ -188,7 +190,7 @@ class FaceGroup:
         numFaces = read_ushort(reader)
         self.faces = []
         for faceId in range(numFaces):
-            face = [read_ushort(reader) for _ in range(3)]
+            face = tuple(read_ushort(reader) for _ in range(3))
             self.faces.append(face)
 
         self.material_id = read_ushort(reader)
@@ -200,7 +202,7 @@ class FaceGroup:
 class Lod:  # level of detail
     def __init__(self):
         self.clipping_range = None
-        self.coords = None
+        self.vertices = None
         self.normals = None
         self.uvs = None
         self.face_groups = None
@@ -209,15 +211,20 @@ class Lod:  # level of detail
         self.clipping_range = read_float(reader)
         num_vertices = read_ushort(reader)
 
-        self.coords = []
+        self.vertices = []
         self.normals = []
         self.uvs = []
         for _ in range(num_vertices):
-            coord = read_triplet(reader)
+            vertex = read_triplet(reader)
             normal = read_triplet(reader)
             uv = read_doublet(reader)
 
-            self.coords.append(coord)
+            if blender_axes:
+                vertex = fix_axes(vertex)
+                normal = fix_axes(normal)
+                uv = fix_axes(uv)
+
+            self.vertices.append(vertex)
             self.normals.append(normal)
             self.uvs.append(uv)
 
