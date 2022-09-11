@@ -56,7 +56,7 @@ def flip_axes(ntlet):
     assert n == 2 or n == 3 or n == 4
 
     if n == 2:
-        return ntlet[0], -ntlet[1]
+        return ntlet[0], 1-ntlet[1]
     elif n == 3:
         return ntlet[0], ntlet[2], ntlet[1]
     else:
