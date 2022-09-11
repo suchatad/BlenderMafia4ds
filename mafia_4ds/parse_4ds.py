@@ -51,10 +51,7 @@ def read_matrix(reader):  # 4x4 float matrix
     return np.matrix(rows)
 
 
-blender_axes = True
-
-
-def fix_axes(ntlet):
+def flip_axes(ntlet):
     n = len(ntlet)
     assert n == 2 or n == 3 or n == 4
 
@@ -219,10 +216,9 @@ class Lod:  # level of detail
             normal = read_triplet(reader)
             uv = read_doublet(reader)
 
-            if blender_axes:
-                vertex = fix_axes(vertex)
-                normal = fix_axes(normal)
-                uv = fix_axes(uv)
+            vertex = flip_axes(vertex)
+            normal = flip_axes(normal)
+            uv = flip_axes(uv)
 
             self.vertices.append(vertex)
             self.normals.append(normal)
@@ -279,8 +275,7 @@ class Morph:
 class MeshBone:
     def read(self, reader):
         self.matrix = read_matrix(reader)
-        if blender_axes:
-            pass  # TODO: Implement fix_axes(matrix)
+        # TODO: Implement flip_axes(matrix)
 
         self.numLockedVertices = read_uint(reader)  # vertices with weight 1
         self.numWeightedVertices = read_uint(reader)
@@ -385,10 +380,9 @@ class Node:
         self.scale = read_triplet(reader)
         self.rotation = read_quartet(reader)
 
-        if blender_axes:
-            self.location = fix_axes(self.location)
-            self.scale = fix_axes(self.scale)
-            self.rotation = fix_axes(self.rotation)
+        self.location = flip_axes(self.location)
+        self.scale = flip_axes(self.scale)
+        self.rotation = flip_axes(self.rotation)
 
         self.culling_flags = read_ubyte(reader)
         self.name = read_string(reader)
