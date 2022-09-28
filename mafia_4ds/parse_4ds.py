@@ -1,5 +1,4 @@
 from struct import unpack
-import numpy as np
 
 
 def read_ushort(reader):
@@ -47,8 +46,9 @@ def read_string(reader):
 
 def read_matrix(reader):  # 4x4 float matrix
     rows = [read_quartet(reader) for _ in range(4)]
-    # TODO: fix axes
-    return np.matrix(rows)
+    rows = [(ntlet[0], ntlet[2], ntlet[1], ntlet[3]) for ntlet in rows]  # first order columns
+    rows = [rows[0], rows[2], rows[1], rows[3]]  # then rows
+    return rows
 
 
 def flip_axes(ntlet):
@@ -120,7 +120,7 @@ class Material:
         self.filename = read_string(reader).lower()
 
         # alpha mapping
-        if self.matProps.AddEffect and self.matProps.UseAlphaTexture:
+        if self.matProps.AddEffect and self.matProps.UseAlphaTexture:  # this corrupts data in morello.4ds
             self.matProps.AlphaTexture = read_string(reader).lower()
 
         # animated texture
@@ -133,12 +133,12 @@ class Material:
 
 class Dummy:
     def __init__(self):
-        self.aabbMin = None
-        self.aabbMax = None
+        self.min = None
+        self.max = None
 
     def read(self, reader):
-        self.aabbMin = read_triplet(reader)
-        self.aabbMax = read_triplet(reader)
+        self.min = read_triplet(reader)
+        self.max = read_triplet(reader)
 
     def write(self, writer):
         raise NotImplementedError()
@@ -146,7 +146,7 @@ class Dummy:
 
 class Bone:
     def __init__(self):
-        self.matrix = None
+        self.matrix = None  # not used?
         self.id = None
 
     def read(self, reader):
@@ -235,11 +235,6 @@ class Lod:  # level of detail
         raise NotImplementedError()
 
 
-class VertexGroup:
-    def read(self, reader):
-        pass
-
-
 class Morph:
     def read(self, reader):
         numTargets = read_ubyte(reader)
@@ -272,61 +267,63 @@ class Morph:
             radius = read_float(reader)
 
 
-class MeshBone:
+class VertexGroup:
     def read(self, reader):
         self.matrix = read_matrix(reader)
-        # TODO: Implement flip_axes(matrix)
 
-        self.numLockedVertices = read_uint(reader)  # vertices with weight 1
-        self.numWeightedVertices = read_uint(reader)
+        self.num_locked_vertices = read_uint(reader)  # vertices with weight 1
+        self.num_weighted_vertices = read_uint(reader)
 
         self.parent_id = read_uint(reader)
 
         self.dmin = read_triplet(reader)
         self.dmax = read_triplet(reader)
 
-        self.weights = [read_float(reader) for _ in range(self.numWeightedVertices)]
+        self.weights = [read_float(reader) for _ in range(self.num_weighted_vertices)]
 
 
 class Mesh:
     def __init__(self, skin=False, morph=False, billboard=False):
-        self.instanceId = None
-        self.hasSkin = skin
-        self.hasMorph = morph
-        self.hasBillboard = billboard
+        self.instance_id = None
+        self.has_skin = skin
+        self.has_morph = morph
+        self.has_billboard = billboard
 
         self.lods = []
         self.armature = None
-        self.meshBones = [] # indexed by lod id
+        self.vertex_groups = []  # indexed by lod id
+        self.morph = None
+        self.skin = None
 
     def read(self, reader):
-        self.instanceId = read_ushort(reader)
-        if self.instanceId > 0:
+        self.instance_id = read_ushort(reader)
+        if self.instance_id > 0:
             return
 
         num_lods = read_ubyte(reader)
-        for lodId in range(num_lods):
-            if lodId > 0:
+        for lod_id in range(num_lods):
+            if lod_id > 0:
                 pass
 
             lod = Lod()
             lod.read(reader)
             self.lods.append(lod)
 
-        if self.hasSkin:
-            for lodId in range(num_lods):
+        if self.has_skin:
+            for lod_id in range(num_lods):
                 lodMeshBones = []
-                numBones = read_ubyte(reader)
+                num_bones = read_ubyte(reader)
                 numLockedVerticesAll = read_uint(reader)  # ???
 
                 dmin = read_triplet(reader)
                 dmax = read_triplet(reader)
 
-                for boneId in range(numBones):
-                    meshBone = MeshBone()
-                    meshBone.read(reader)
+                for bone_id in range(num_bones):
+                    vertex_group = VertexGroup()
+                    vertex_group.read(reader)
+                    self.vertex_groups.append(vertex_group)
 
-        if self.hasMorph:
+        if self.has_morph:
             self.morph = Morph()
             self.morph.read(reader)
 
@@ -375,7 +372,7 @@ class Node:
             visual_type = read_ubyte(reader)
             render_flags = read_ushort(reader)
 
-        parent_id = read_ushort(reader)
+        self.parent_id = read_ushort(reader)
         self.location = read_triplet(reader)
         self.scale = read_triplet(reader)
         self.rotation = read_quartet(reader)
@@ -386,11 +383,7 @@ class Node:
 
         self.culling_flags = read_ubyte(reader)
         self.name = read_string(reader)
-        print('name: ', self.name, ', type: ',self.type)
         self.parameters = read_string(reader)
-
-        if parent_id > 0:
-            self.parent_id = parent_id
 
         if self.type == 0x01:
             self.frame = VisualFrame(visual_type, render_flags)
