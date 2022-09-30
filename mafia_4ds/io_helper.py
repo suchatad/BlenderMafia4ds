@@ -39,6 +39,23 @@ def read_string_fixed(reader, length):
     return string
 
 
+def read_string_array(reader): # '\0'-separated array of strings, terminated with EOF
+    array = []
+    bytes = []
+
+    while True:
+        byte = reader.read(1)
+        if byte == b'':
+            return array
+        elif byte == b'\0':
+            bstr = b''.join(bytes)
+            string = bstr.decode('utf-8')
+            array.append(string)
+            bytes = []
+        else:
+            bytes.append(byte)
+
+
 def read_string(reader):
     length = read_ubyte(reader)
     return read_string_fixed(reader, length)
