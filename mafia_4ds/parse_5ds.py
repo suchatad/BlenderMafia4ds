@@ -40,7 +40,7 @@ class BoneAnimation:
             if num_position_frames % 2 == 0:
                 read_ushort(reader)
 
-            self.position_keys = [read_triplet(reader) for _ in range(num_position_frames)]
+            self.position_keys = [flip_axes(read_triplet(reader)) for _ in range(num_position_frames)]
 
         if self.has_scale:
             num_scale_frames = read_ushort(reader)
