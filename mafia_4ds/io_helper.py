@@ -35,7 +35,7 @@ def read_ubyte(reader):
 
 def read_string_fixed(reader, length):
     bytes = reader.read(length)
-    string = bytes.decode('utf-8')
+    string = bytes.decode('ISO-8859-2')  # extended ascii characters appear in game files
     return string
 
 
@@ -49,7 +49,7 @@ def read_string_array(reader): # '\0'-separated array of strings, terminated wit
             return array
         elif byte == b'\0':
             bstr = b''.join(bytes)
-            string = bstr.decode('utf-8')
+            string = bstr.decode('ISO-8859-2')
             array.append(string)
             bytes = []
         else:
