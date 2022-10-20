@@ -3,6 +3,7 @@ from io_helper import *
 
 class MatProps:
     def __init__(self, flags):
+        # TODO: add detailed field description
         self.UseDiffuseTex = (flags & 0x00040000) != 0
 
         self.Coloring = (flags & 0x08000000) != 0
@@ -36,7 +37,14 @@ class Material:
         self.emission_color = None
         self.alpha = None
         self.metallic = None
-        self.filename = None
+        self.diffuse_texture = None
+        self.has_effect = None
+        self.alpha_texture = None
+        self.environment_texture = None
+        self.animated_frames = None
+        self.animated_frames_length = None
+        self.unknown1 = None
+        self.unknown2 = None
 
     def read(self, reader):
         self.flags = read_uint(reader)
@@ -48,25 +56,35 @@ class Material:
         self.alpha = read_float(reader)
 
         # env mapping
-        if self.matProps.UseEnvTexture:
+        if (self.flags & 0x00080000) != 0:  # UseEnvTexture
             self.metallic = read_float(reader)
-            self.matProps.envTexture = read_string(reader).lower()
+            self.environment_texture = read_string(reader).lower()  # todo: find out whether .lower() is redundant
+            #self.matProps.envTexture = read_string(reader).lower()
         else:
             self.metallic = 0.0
 
         # diffuse mapping
-        self.filename = read_string(reader).lower()
+        self.diffuse_texture = read_string(reader).lower()
+        self.has_effect = (self.flags & 0x00008000) != 0  # AddEffect
+        self.use_alpha_color = (self.flags & 0x20000000) != 0
 
         # alpha mapping
-        if self.matProps.AddEffect and self.matProps.UseAlphaTexture:  # this corrupts data in morello.4ds
-            self.matProps.AlphaTexture = read_string(reader).lower()
+        if (self.flags & 0x40000000) != 0:  # UseAlphaTexture:
+            # here corrupts data from morello.4ds
+            self.alpha_texture = read_string(reader).lower()
+            #self.matProps.AlphaTexture = self.alpha_texture
 
         # animated texture
-        if self.matProps.AnimatedDiffuse:
-            self.matProps.AnimatedFrames = read_uint(reader)
-            self.matProps.unknown1 = read_ushort(reader)
-            self.matProps.AnimFrameLength = read_uint(reader)
-            self.matProps.unknown2 = read_ulong(reader)
+        if (self.flags & 0x04000000) != 0:  # AnimatedDiffuse
+            self.animated_frames = read_uint(reader)
+            self.unknown1 = read_ushort(reader)
+            self.animated_frames_length = read_uint(reader)
+            self.unknown2 = read_ulong(reader)
+
+            #self.matProps.AnimatedFrames = read_uint(reader)
+            #self.matProps.unknown1 = read_ushort(reader)
+            #self.matProps.AnimFrameLength = read_uint(reader)
+            #self.matProps.unknown2 = read_ulong(reader)
 
 
 class Dummy:
@@ -109,7 +127,7 @@ class Target:
         raise NotImplementedError()
 
 
-frame_types = { # visual frame handled separately
+frame_types = {  # visual frame handled separately
     6: Dummy,
     7: Target,
     10: Bone,
@@ -206,6 +224,15 @@ class Morph:
 
 
 class VertexGroup:
+    def __init__(self):
+        self.matrix = None
+        self.num_locked_vertices = None
+        self.num_weighted_vertices = None
+        self.parent_id = None
+        self.dmin = None
+        self.dmax = None
+        self.weights = None
+
     def read(self, reader):
         self.matrix = read_matrix(reader)
 
@@ -305,7 +332,6 @@ class Node:
 
     def read(self, reader):
         self.type = read_ubyte(reader)
-
         if self.type == 0x01:  # visual frame
             visual_type = read_ubyte(reader)
             render_flags = read_ushort(reader)
@@ -314,7 +340,6 @@ class Node:
         self.location = read_triplet(reader)
         self.scale = read_triplet(reader)
         self.rotation = read_quartet(reader)
-
         self.location = flip_axes(self.location)
         self.scale = flip_axes(self.scale)
         self.rotation = flip_axes(self.rotation)
