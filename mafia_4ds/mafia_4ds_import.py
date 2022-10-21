@@ -1,5 +1,6 @@
 import bpy
 import bmesh
+import os
 import time
 from mathutils import Matrix, Vector
 
@@ -277,7 +278,7 @@ class FourDSImporter:
             self.fo.read(f)
 
         # create and link collections
-        filename = self.filepath.split('/')[-1]  # this fails when filepath is just a filename
+        filename = os.path.basename(self.filepath)
         self.file_collection = bpy.data.collections.new(filename)
         self.dummy_collection = bpy.data.collections.new("Dummy objects")
         bpy.context.scene.collection.children.link(self.file_collection)
