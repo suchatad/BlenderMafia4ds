@@ -1,4 +1,4 @@
-from io_helper import *
+from . io_helper import *
 
 
 KEY_POSITION = 2

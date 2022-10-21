@@ -1,530 +1,351 @@
 import bpy
 import bmesh
-import struct
-import mathutils
+import time
+from mathutils import Matrix, Vector
 
-from bpy        import ops
-from bpy        import path
-from bpy        import props
-from bpy        import types
-from bpy        import utils
+from bpy import ops
+from bpy import path
+from bpy import props
+from bpy import types
+from bpy import utils
 from bpy_extras import io_utils
+from bpy_extras import node_shader_utils
+from bpy_extras import image_utils
+
+from . import parse_4ds as FourDS
+from . import parse_5ds as FiveDS
 
 
-class Mafia4ds_Importer:
-    def __init__(self, config):
-        self.Config = config
-    
-    
-    def SetMaterialData(self, material, diffuse, emission, alpha, metallic):
-        material.use_nodes = True
-        
-        node  = None
-        nodes = material.node_tree.nodes
-        
-        for node in nodes:
-            if node.type == "BSDF_PRINCIPLED":
-                break
-        
-        if node is None:
-            return
-            
-        node.inputs["Emission" ].default_value = [ emission[0], emission[1], emission[2], 1.0]
-        node.inputs["Alpha"    ].default_value = alpha
-        node.inputs["Metallic" ].default_value = metallic
-        node.inputs["Specular" ].default_value = 0.0
-        node.inputs["Roughness"].default_value = 0.0
-            
-        baseColor      = node.inputs["Base Color"]
-        baseColorLinks = baseColor.links
-            
-        if len(baseColorLinks) > 0:
-            image      = baseColorLinks[0].from_node.image
+def blen_load_image(filepath: str):
+    image = image_utils.load_image(
+        filepath,
+        place_holder=True,
+        check_existing=True,
+    )
+    return image
+
+
+def blen_create_material(material: FourDS.Material):
+    bma = bpy.data.materials.new(material.diffuse_texture)
+    bma_wrap = node_shader_utils.PrincipledBSDFWrapper(bma, is_readonly=False, use_nodes=True)
+
+    bma_wrap.alpha = material.alpha
+    bma_wrap.metallic = material.metallic
+    bma_wrap.specular = 0.0
+    bma_wrap.roughness = 0.0
+
+    texture_wrapper = bma_wrap.base_color_texture
+
+    filepath = '{}maps/{}'.format(GetPreferences().DataPath, material.diffuse_texture)
+    diffuse_image = blen_load_image(filepath)
+    texture_wrapper.image = diffuse_image
+
+    if material.has_effect:
+        assert not (material.alpha_texture and material.use_alpha_color)  # hopefully this won't happen
+
+        if material.alpha_texture:
+            alpha_image = blen_load_image(material.alpha_texture)
+            bma_wrap.alpha_texture.image = alpha_image
+        elif material.use_alpha_color:
+            # not every color key is black !!!!
+            # this doesn't work on those that are not
+            # todo: make it work
+            bma.blend_method = 'CLIP'
+
+            # rgb = diffuse_image.pixels[:3]  # color of the corner pixel
+            # print("pixels", rgb)
+
+            color_ramp = bma.node_tree.nodes.new("ShaderNodeValToRGB")
+            color_ramp.color_ramp.elements[1].position = 1e-5
+
+            bma.node_tree.links.new(texture_wrapper.node_image.outputs["Color"], color_ramp.inputs["Fac"])
+            bma.node_tree.links.new(color_ramp.outputs["Color"], bma_wrap.node_principled_bsdf.inputs["Alpha"])
+
+    return bma
+
+
+class FourDSImporter:
+    node_handlers = {}
+
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.fo = None
+
+        self.file_collection = None
+        self.dummy_collection = None
+
+        self.materials = []
+        self.objects = []
+
+        self.armature_obj = None
+        self.armature_scale_factor = None
+        self.base_id = None
+
+    def apply_transform(self, node, obj):
+        obj.location = node.location
+        obj.scale = node.scale
+        obj.rotation_mode = 'QUATERNION'
+        obj.rotation_quaternion = node.rotation
+
+        if node.parent_id > 0:
+            obj.parent = self.objects[node.parent_id - 1]
+
+    def create_meshobject(self, name, indexed=True, collection=None):
+        me = bpy.data.meshes.new(name)
+        obj = bpy.data.objects.new(name, me)
+
+        if not collection:
+            collection = self.file_collection
+        collection.objects.link(obj)
+
+        if indexed:
+            self.objects.append(obj)
+
+        return me, obj
+
+    def handle_general(self, node):
+        me, obj = self.create_meshobject(node.name)
+        self.apply_transform(node, obj)
+
+    def handle_bone(self, node):
+        # this one is tricky
+        # 4ds treats every bone as a separate object with its own set of transformation
+        # blender handles bones within a single armature object
+        # for object orientation of the local axes comes from its transformation matrix
+        # for bones Y axis is a vector from head to tail, X and Z depend on the bone roll
+
+        # create dummy obj
+        # todo: find a way to remove this block
+        me, obj = self.create_meshobject(node.name)
+        self.apply_transform(node, obj)
+
+        bone_id = node.frame.id
+        bone_matrix = Matrix(node.frame.matrix)
+
+        # if there's no armature, make one
+        if not self.armature_obj:
+            armature = bpy.data.armatures.new('Armature')
+            armature.display_type = 'STICK'
+            self.armature_obj = bpy.data.objects.new('Armature', armature)
+            self.armature_obj.show_in_front = True
+            self.file_collection.objects.link(self.armature_obj)
+
+            bpy.context.view_layer.objects.active = self.armature_obj
+            bpy.ops.object.mode_set(mode='EDIT')
+            base_bone = armature.edit_bones.new('base')
+            base_bone.tail = (0, 0, 0)
+            base_bone.head = (0, -0.3, 0)  # arbitrary
+
+            self.base_id = node.parent_id
+            self.armature_obj.parent = self.objects[self.base_id - 1]  # affected mesh
         else:
-            image      = nodes.new(type="ShaderNodeTexImage")
-            imageColor = image.outputs["Color"]
-            
-            links      = material.node_tree.links
-            links.new(imageColor, baseColor)
-        
-        if len(diffuse) == 0:
-            return
-        
-        filePath    = "{}maps/{}".format(GetPreferences().DataPath, diffuse)
-        file        = bpy.data.images.load(filepath = filePath, check_existing = True)
-        image.image = file
-    
-    
-    def DeserializeStringFixed(self, reader, length):
-        tuple  = struct.unpack("{}c".format(length), reader.read(length))
-        string = ""
-        
-        for c in tuple:
-            string += c.decode()
-        
-        return string
-    
-    
-    def DeserializeString(self, reader):
-        length = struct.unpack("B", reader.read(1))[0]
-        return self.DeserializeStringFixed(reader, length)
-    
-    
-    def DeserializeMaterial(self, reader):
-        material = bpy.data.materials.new("material")
-        matProps = material.MaterialProps
-        
-        # material flags
-        matFlags = struct.unpack("I", reader.read(4))[0]
-        
-        matProps.UseDiffuseTex   = (matFlags & 0x00040000) != 0
-        
-        matProps.Coloring        = (matFlags & 0x08000000) != 0
-        matProps.MipMapping      = (matFlags & 0x00800000) != 0
-        matProps.TwoSided        = (matFlags & 0x10000000) != 0
-    
-        matProps.AddEffect       = (matFlags & 0x00008000) != 0
-        
-        matProps.ColorKey        = (matFlags & 0x20000000) != 0
-        matProps.AdditiveBlend   = (matFlags & 0x80000000) != 0
-        matProps.UseAlphaTexture = (matFlags & 0x40000000) != 0
-    
-        matProps.UseEnvTexture   = (matFlags & 0x00080000) != 0
-        matProps.EnvDefaultMode  = (matFlags & 0x00000100) != 0
-        matProps.EnvMultiplyMode = (matFlags & 0x00000200) != 0
-        matProps.EnvAdditiveMode = (matFlags & 0x00000400) != 0
-        matProps.EnvYAxisRefl    = (matFlags & 0x00001000) != 0
-        matProps.EnvYAxisProj    = (matFlags & 0x00002000) != 0
-        matProps.EnvZAxisProj    = (matFlags & 0x00004000) != 0
-    
-        matProps.AnimatedDiffuse = (matFlags & 0x04000000) != 0
-        matProps.AnimatedAlpha   = (matFlags & 0x02000000) != 0
-        
-        # colors
-        matProps.AmbientColor = struct.unpack("fff", reader.read(4 * 3))
-        matProps.DiffuseColor = struct.unpack("fff", reader.read(4 * 3))
-        emission              = struct.unpack("fff", reader.read(4 * 3))
-        
-        # alpha
-        alpha = struct.unpack("f", reader.read(4))[0]
-        
-        # env mapping
-        metallic = 0.0
-        
-        if matProps.UseEnvTexture:
-            metallic            = struct.unpack("f", reader.read(4))[0]
-            matProps.EnvTexture = self.DeserializeString(reader).lower()
-        
-        # diffuse mapping
-        diffuse = self.DeserializeString(reader).lower()
-        material.name = diffuse
-        
-        # alpha mapping
-        if matProps.AddEffect and matProps.UseAlphaTexture:
-            matProps.AlphaTexture = self.DeserializeString(reader).lower()
-        
-        # animated texture
-        if matProps.AnimatedDiffuse:
-            matProps.AnimatedFrames  = struct.unpack("I", reader.read(4))[0]
-            reader.read(2)
-            matProps.AnimFrameLength = struct.unpack("I", reader.read(4))[0]
-            reader.read(8)
-        
-        self.SetMaterialData(material, diffuse, emission, alpha, metallic)
-        
-        return material
-    
-    
-    def DeserializeVisualLod(self, reader, materials, mesh, meshData, meshProps):
-        meshProps.LodRatio = struct.unpack("f", reader.read(4))[0]
-        bMesh              = bmesh.new()
-        
-        # vertices
-        vertices           = bMesh.verts
-        uvs                = []
-        vertexCount        = struct.unpack("H", reader.read(2))[0]
-        
-        for vertexIdx in range(vertexCount):
-            position       = struct.unpack("fff", reader.read(4 * 3))
-            normal         = struct.unpack("fff", reader.read(4 * 3))
-            uv             = struct.unpack("ff",  reader.read(4 * 2))
-            
-            vertex         = vertices.new()
-            vertex.co      = [ position[0], position[2], position[1] ]
-            vertex.normal  = [ normal[0],   normal[2],   normal[1] ]
-            uvs.append([ uv[0], -uv[1] ])
-        
-        vertices.ensure_lookup_table()
-        
-        # faces
-        faces               = bMesh.faces
-        uvLayer             = bMesh.loops.layers.uv.new()
-        faceGroupCount      = struct.unpack("B", reader.read(1))[0]
-        
-        for faceGroupIdx in range(faceGroupCount):
-            faceCount       = struct.unpack("H", reader.read(2))[0]
-            
-            ops.object.material_slot_add({ "object" : mesh })
-            materialSlotIdx = len(mesh.material_slots) - 1
-            materialSlot    = mesh.material_slots[materialSlotIdx]
-            
-            for faceIdx in range(faceCount):
-                vertexIdxs             = struct.unpack("HHH", reader.read(2 * 3))
-                vertexIdxsSwap         = [ vertexIdxs[0], vertexIdxs[2], vertexIdxs[1] ]
-                
-                try:
-                    face               = faces.new([ vertices[vertexIdxsSwap[0]], vertices[vertexIdxsSwap[1]], vertices[vertexIdxsSwap[2]] ])
-                except:
-                    ShowWarning("Mesh {} has duplicate face [ {}, {}, {} ]!".format(mesh.name, vertexIdxsSwap[0], vertexIdxsSwap[1], vertexIdxsSwap[2]))
-                
-                face.material_index    = materialSlotIdx
-                
-                for loop, vertexIdx in zip(face.loops, vertexIdxsSwap):
-                    loop[uvLayer].uv   = uvs[vertexIdx]
-            
-            materialIdx                = struct.unpack("H", reader.read(2))[0]
-            
-            if materialIdx > 0:
-                materialSlot.material = materials[materialIdx - 1]
-        
-        bMesh.to_mesh(meshData)
-        del bMesh
-    
-    
-    def DeserializeVisual(self, reader, materials, mesh, meshData, meshProps):
-        instanceIdx           = struct.unpack("H", reader.read(2))[0]
-        meshProps.InstanceIdx = instanceIdx
-        
-        if instanceIdx > 0:
-            return
-        
-        meshName = mesh.name
-        lodCount = struct.unpack("B", reader.read(1))[0]
-        
-        for lodIdx in range(lodCount):
-            if lodIdx > 0:
-                name           = "{}_lod{}".format(meshName, lodIdx)
-                meshData       = bpy.data.meshes.new(name)
-                newMesh        = bpy.data.objects.new(name, meshData)
-                newMesh.parent = mesh
-                mesh           = newMesh
-                meshProps      = mesh.MeshProps
-                
-                bpy.context.collection.objects.link(mesh)
-            
-            self.DeserializeVisualLod(reader, materials, mesh, meshData, meshProps)
-            
-            mesh.select_set(True)
-            ops.object.shade_smooth()
-            
-            if lodIdx > 0:
-                mesh.hide_set(True)
-                mesh.hide_render = True
-            
-            mesh.select_set(False)
-    
-    
-    def DeserializeDummy(self, reader, mesh, meshData):
-        aabbMin  = struct.unpack("fff", reader.read(4 * 3))
-        aabbMax  = struct.unpack("fff", reader.read(4 * 3))
-        
-        vertexData = [
-            [ aabbMin[0], aabbMax[2], aabbMin[1],  0,  1,  0 ],
-            [ aabbMax[0], aabbMax[2], aabbMin[1],  0,  1,  0 ],
-            [ aabbMin[0], aabbMax[2], aabbMax[1],  0,  1,  0 ],
-            [ aabbMax[0], aabbMax[2], aabbMax[1],  0,  1,  0 ],
-            [ aabbMax[0], aabbMin[2], aabbMin[1],  0, -1,  0 ],
-            [ aabbMin[0], aabbMin[2], aabbMin[1],  0, -1,  0 ],
-            [ aabbMax[0], aabbMin[2], aabbMax[1],  0, -1,  0 ],
-            [ aabbMin[0], aabbMin[2], aabbMax[1],  0, -1,  0 ],
-            [ aabbMin[0], aabbMax[2], aabbMax[1],  0,  0,  1 ],
-            [ aabbMax[0], aabbMax[2], aabbMax[1],  0,  0,  1 ],
-            [ aabbMin[0], aabbMin[2], aabbMax[1],  0,  0,  1 ],
-            [ aabbMax[0], aabbMin[2], aabbMax[1],  0,  0,  1 ],
-            [ aabbMax[0], aabbMax[2], aabbMax[1],  1,  0,  0 ],
-            [ aabbMax[0], aabbMax[2], aabbMin[1],  1,  0,  0 ],
-            [ aabbMax[0], aabbMin[2], aabbMax[1],  1,  0,  0 ],
-            [ aabbMax[0], aabbMin[2], aabbMin[1],  1,  0,  0 ],
-            [ aabbMax[0], aabbMax[2], aabbMin[1],  0,  0, -1 ],
-            [ aabbMin[0], aabbMax[2], aabbMin[1],  0,  0, -1 ],
-            [ aabbMax[0], aabbMin[2], aabbMin[1],  0,  0, -1 ],
-            [ aabbMin[0], aabbMin[2], aabbMin[1],  0,  0, -1 ],
-            [ aabbMin[0], aabbMax[2], aabbMin[1], -1,  0,  0 ],
-            [ aabbMin[0], aabbMax[2], aabbMax[1], -1,  0,  0 ],
-            [ aabbMin[0], aabbMin[2], aabbMin[1], -1,  0,  0 ],
-            [ aabbMin[0], aabbMin[2], aabbMax[1], -1,  0,  0 ]
-        ]
-        
-        faceData = [
-            [ 0,  2,  1  ],
-            [ 1,  2,  3  ],
-            [ 4,  6,  5  ],
-            [ 5,  6,  7  ],
-            [ 8,  10, 9  ],
-            [ 9,  10, 11 ],
-            [ 12, 14, 13 ],
-            [ 13, 14, 15 ],
-            [ 16, 18, 17 ],
-            [ 17, 18, 19 ],
-            [ 20, 22, 21 ],
-            [ 21, 22, 23 ]
-        ]
-        
-        bMesh    = bmesh.new()
-        vertices = bMesh.verts
-        vx       = []
-        
-        for v in vertexData:
-            vertex        = vertices.new()
-            vertex.co     = [ v[0], v[2], v[1] ] # todo aabb
-            vertex.normal = [ v[3], v[5], v[4] ]
-            vx.append(vertex)
-        
-        vertices.ensure_lookup_table()
-        
-        faces = bMesh.faces
-        
-        for f in faceData:
-            faces.new([ vx[f[0]], vx[f[1]], vx[f[2]] ])
-        
-        bMesh.to_mesh(meshData)
-        del bMesh
-        
-        mesh.select_set(True)
-        mesh.hide_set(True)
-        mesh.hide_render = True
-        mesh.select_set(False)
-    def DeserializeBillboard(self,reader, materials, mesh, meshData, meshProps):
-        meshProps.Axis     = struct.unpack("I", reader.read(4))[0]
-        meshProps.AxisMode = struct.unpack("B", reader.read(1))[0]
-        
-    def DeserializePortal(self, reader, mesh, meshData, meshProps):
-        bMesh              = bmesh.new()
-        
-        vertices           = bMesh.verts
-        
-        vertexCount        = struct.unpack("B", reader.read(1))[0]
-        meshProps.portalflags = struct.unpack("I", reader.read(4))[0]
-        #???
-        nearRange = struct.unpack("f", reader.read(4))[0]
-        farRange = struct.unpack("f", reader.read(4))[0]
-        #???
-        normal = struct.unpack("fff", reader.read(4 * 3))
-        dotp = struct.unpack("f", reader.read(4))[0]
-        
-        for vertexIdx in range(vertexCount):
-            position       = struct.unpack("fff", reader.read(4 * 3))
-            vertex         = vertices.new()
-            vertex.co      = [ position[0], position[2], position[1] ]
-            
-        vertices.ensure_lookup_table()
-        
-        faces =  bMesh.faces
-        portalv = []
-        for v in vertices:
-            portalv.append(v) 
-        faces.new(portalv)
-        
-        bMesh.to_mesh(meshData)
-        del bMesh
-    
-    def DeserializeSector(self, reader, mesh, meshData, meshProps):
-        meshProps.flags1  = struct.unpack("I", reader.read(4))[0]
-        meshProps.flags2  = struct.unpack("I", reader.read(4))[0]
-        
-        bMesh              = bmesh.new()
-        
-        # vertices
-        vertices           = bMesh.verts
-        uvs                = []
-        vertexCount        = struct.unpack("I", reader.read(4))[0]
-        faceCount          = struct.unpack("I", reader.read(4))[0]
-        
-        for vertexIdx in range(vertexCount):
-            position       = struct.unpack("fff", reader.read(4 * 3))
-            vertex         = vertices.new()
-            vertex.co      = [ position[0], position[2], position[1] ]
-            uvs.append([ 0, 0 ])
-        
-        vertices.ensure_lookup_table()
-        
-        # faces
-        faces               = bMesh.faces
-        uvLayer             = bMesh.loops.layers.uv.new()
-        
+            armature = self.armature_obj.data
+            bpy.context.view_layer.objects.active = self.armature_obj
+            bpy.ops.object.mode_set(mode='EDIT')
 
-        for faceIdx in range(faceCount):
-            vertexIdxs             = struct.unpack("HHH", reader.read(2 * 3))
-            vertexIdxsSwap         = [ vertexIdxs[0], vertexIdxs[2], vertexIdxs[1] ]
-            try:
-                face           = faces.new([ vertices[vertexIdxsSwap[0]], vertices[vertexIdxsSwap[1]], vertices[vertexIdxsSwap[2]] ])
-            except:
-                ShowWarning("Mesh {} has duplicate face [ {}, {}, {} ]!".format(mesh.name, vertexIdxsSwap[0], vertexIdxsSwap[1], vertexIdxsSwap[2]))
-                
-        bMesh.to_mesh(meshData)
-        del bMesh
-        
-        min = struct.unpack("fff", reader.read(4 * 3))
-        max = struct.unpack("fff", reader.read(4 * 3))
-        numPortals = struct.unpack("B", reader.read(1))[0]
-        portalIdx = 0
-        meshName = mesh.name
-        
-        for portal in range(numPortals):
-            name           = "{}_port{}".format(meshName, portalIdx)
-            meshData       = bpy.data.meshes.new(name)
-            newMesh        = bpy.data.objects.new(name, meshData)
-            mesh           = newMesh
-            meshProps      = mesh.MeshProps
-            bpy.context.collection.objects.link(mesh)
-            self.DeserializePortal(reader, mesh, meshData, meshProps)
-            portalIdx += 1
-    
-    def DeserializeMesh(self, reader, materials, meshes):
-        type        = struct.unpack("B", reader.read(1))[0]
-        visualType  = 0
-        renderFlags = 0
-        
-        if type == 0x01:
-            visualType  = struct.unpack("B", reader.read(1))[0]
-            renderFlags = struct.unpack("H", reader.read(2))[0]
-        
-        parentIdx            = struct.unpack("H", reader.read(2))[0]
-        location             = struct.unpack("fff", reader.read(4 * 3))
-        scale                = struct.unpack("fff", reader.read(4 * 3))
-        rotation             = struct.unpack("ffff", reader.read(4 * 4))
-        
-        cullingFlags         = struct.unpack("B", reader.read(1))[0]
-        name                 = self.DeserializeString(reader)
-        parameters           = self.DeserializeString(reader)
-        
-        meshData             = bpy.data.meshes.new(name)
-        mesh                 = bpy.data.objects.new(name, meshData)
-        
-        bpy.context.collection.objects.link(mesh)
-        meshes.append(mesh)
-        
-        meshProps              = mesh.MeshProps
-        meshProps.Type         = "0x{:02x}".format(type)
-        meshProps.VisualType   = "0x{:02x}".format(visualType)
-        meshProps.Parameters   = parameters
-        meshProps.RenderFlags  = renderFlags
-        meshProps.CullingFlags = cullingFlags
-        
-        if parentIdx > 0:
-            mesh.parent = meshes[parentIdx - 1]
-        
-        mesh.location       = [ location[0], location[2], location[1] ]
-        mesh.scale          = [ scale[0],    scale[2],    scale[1] ]
-        mesh.rotation_euler = mathutils.Quaternion([ rotation[0], rotation[1], rotation[3], rotation[2] ]).to_euler()
-        
-        if type == 0x01:
-            if visualType == 0x00:
-                self.DeserializeVisual(reader, materials, mesh, meshData, meshProps)
-                
-            elif visualType == 0x04:
-                self.DeserializeVisual(reader, materials, mesh, meshData, meshProps)
-                self.DeserializeBillboard(reader, materials, mesh, meshData, meshProps)
-                
+        bone = armature.edit_bones.new(node.name)
+
+        # another (potential?) problem is bone scaling
+        # scale factors other than 1.0 seem to appear only on root bones of skeletal branches
+        # they also tend to be the same
+        # if that's the case we can simply scale the entire armature with a common scale factor
+        # otherwise it's a little bit more complicated todo: check if this can actually happen
+        if node.parent_id == self.base_id:
+            bone.parent = armature.edit_bones['base']
+            bone.head = node.location
+            if self.armature_scale_factor:
+                if self.armature_scale_factor != node.scale:
+                    raise NotImplementedError('Non-uniform armature scaling is not implemented.')
             else:
-                ShowError("Unsupported visual type {}!".format(visualType))
-                return False
-            
-        elif type == 0x06:
-            self.DeserializeDummy(reader, mesh, meshData)
-            
-        elif type == 0x05:
-            self.DeserializeSector(reader, mesh, meshData, meshProps)
-            
+                self.armature_scale_factor = node.scale
+
         else:
-            ShowError("Unsupported mesh type {}!".format(type))
-            return False
-            
-        return True
-    
-    
-    def DeserializeFile(self, reader):
-        fourcc = self.DeserializeStringFixed(reader, 4)
-        if fourcc != "4DS\0":
-            ShowError("Not a 4DS file!")
-            return
-        
-        version = struct.unpack("H", reader.read(2))[0]
-        if version != 0x1d:
-            ShowError("Invalid 4DS version {}!".format(version))
-            return
-        
-        scene      = types.Scene
-        
-        guid       = struct.unpack("Q", reader.read(8))[0]
-        scene.guid = guid
-        
-        # read all materials
-        materialCount = struct.unpack("H", reader.read(2))[0]
-        materials     = []
-        
-        for idx in range(materialCount):
-            material = self.DeserializeMaterial(reader)
-            materials.append(material)
-        
-        # read all meshes
-        meshCount = struct.unpack("H", reader.read(2))[0]
-        meshes    = []
-        
-        for idx in range(meshCount):
-             result = self.DeserializeMesh(reader, materials, meshes)
-             if result == False:
-                 break
-        
-        # allow 5ds animation
-        isAnimated       = struct.unpack("B", reader.read(1))[0]
-        scene.isAnimated = isAnimated
-    
-    
-    def Import(self, filename):
-        with open(filename, "rb") as reader:
-            self.DeserializeFile(reader)
-        
-        return {'FINISHED'}
+            if node.scale != (1.0, 1.0, 1.0):
+                raise NotImplementedError('Non-uniform armature scaling is not implemented.')
+
+            parent_name = self.fo.nodes[node.parent_id-1].name
+            bone.parent = armature.edit_bones[parent_name]
+            bone.head = Vector(node.location) + bone.parent.head
+
+        # bones in 4ds format come with transformation matrices defining default rotation and scale (rest pose)
+        # there is some ambiguity in how to interpret them since their effect depends on the orientation of unit bone
+        # they act on, ultimately this won't influence animations and doesn't really matter
+        bone.tail = bone.head + bone_matrix @ Vector((0, 1, 0))
+
+        # switch back to object mode
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    def handle_dummy(self, node):
+        me, obj = self.create_meshobject(node.name, collection=self.dummy_collection)
+        self.apply_transform(node, obj)
+
+        # create axis aligned cuboid
+        diagonal = [b - a for a, b in zip(node.frame.min, node.frame.max)]
+        diagonal.append(1.0)
+        mat = Matrix.Diagonal(diagonal)
+
+        bm = bmesh.new()
+        bmesh.ops.create_cube(bm, size=1, matrix=mat)
+        bm.to_mesh(me)
+        bm.free()
+
+        # make it pretty
+        obj.display_type = 'WIRE'
+        obj.show_name = True
+
+    def handle_visual_frame(self, node):
+        for lod_id, lod in enumerate(node.frame.object.lods):
+            if lod_id == 0:
+                indexed = True
+                name = node.name
+            else:
+                indexed = False
+                name = '{}_lod{}'.format(node.name, lod_id)
+
+            me, obj = self.create_meshobject(name, indexed=indexed)
+            self.apply_transform(node, obj)
+
+            # build mesh
+            all_faces = []
+            material_ids = []
+            for face_group in lod.face_groups:
+                all_faces.extend(face_group.faces)
+                material_ids.extend([face_group.material_id] * len(face_group.faces))
+
+            me.from_pydata(lod.vertices, [], all_faces)
+
+            # set up normals
+            me.flip_normals()
+            me.normals_split_custom_set_from_vertices(lod.normals)
+            me.use_auto_smooth = True
+
+            # set up uv layer
+            uv_layer = me.uv_layers.new(do_init=False)
+            for poly in me.polygons:
+                for loop_index in range(poly.loop_start, poly.loop_start + poly.loop_total):
+                    vertex_index = me.loops[loop_index].vertex_index
+                    uv_layer.data[loop_index].uv = lod.uvs[vertex_index]
+
+            slot_dict = {}  # maps material_id to slot_id
+            # face groups come in reverse order to material definitions
+            for slot_id, face_group in enumerate(lod.face_groups):
+                bpy.ops.object.material_slot_add({"object": obj})
+                material_id = face_group.material_id
+                slot_dict[material_id] = slot_id
+                material_slot = obj.material_slots[slot_id]
+                material_slot.material = self.materials[material_id - 1]
+
+            for face, material_id in zip(me.polygons, material_ids):
+                face.material_index = slot_dict[material_id]
+
+            # set up blender vertex groups
+            # vertex groups defined in a 4ds file are always disjoint
+            # this means that each vertex can be influenced by only one bone
+            # keep this in mind when creating in-game models
+            vertex_groups = node.frame.object.vertex_groups
+            if vertex_groups:
+                vertex_counter = 0
+
+                # bone nodes indexed by bone id
+                bone_nodes = dict((node.frame.id, node) for node in self.fo.nodes if node.type == 10)
+                for bone_id, vertex_group in enumerate(vertex_groups):
+                    bone_node = bone_nodes[bone_id]
+                    bvg = obj.vertex_groups.new(name=bone_node.name)
+
+                    # sets all weights to 1
+                    locked_vertices = list(range(vertex_counter, vertex_group.num_locked_vertices +
+                                                 len(vertex_group.weights) + vertex_counter))
+                    vertex_counter += vertex_group.num_locked_vertices + len(vertex_group.weights)
+                    bvg.add(locked_vertices, 1.0, 'ADD')
+
+            # hide secondary lods
+            if lod_id > 0:
+                obj.hide_set(True)  # obj.hide_viewport broken?
+                obj.hide_render = True
+
+    def handle_node(self, node: FourDS.Node):
+        if node.type in FourDSImporter.node_handlers:
+            handler = FourDSImporter.node_handlers[node.type]
+            handler(self, node)
+        else:
+            self.handle_general(node)
+            ShowWarning("Skipping node {} of unimplemented type {}".format(node.name, node.type))
+
+    def import_file(self):
+        with open(self.filepath, "rb") as f:
+            self.fo = FourDS.FourDSFile()
+            self.fo.read(f)
+
+        # create and link collections
+        filename = self.filepath.split('/')[-1]  # this fails when filepath is just a filename
+        self.file_collection = bpy.data.collections.new(filename)
+        self.dummy_collection = bpy.data.collections.new("Dummy objects")
+        bpy.context.scene.collection.children.link(self.file_collection)
+        self.file_collection.children.link(self.dummy_collection)
+
+        # load materials and handle nodes
+        self.materials = [blen_create_material(mo) for mo in self.fo.materials]
+        for node in self.fo.nodes:
+            self.handle_node(node)
+
+        # set up the armature
+        if self.armature_obj:
+            character_object = self.armature_obj.parent
+            arm_mod = character_object.modifiers.new(self.armature_obj.name, 'ARMATURE')
+            arm_mod.object = self.armature_obj
+            self.armature_obj.scale = self.armature_scale_factor
+
+
+FourDSImporter.node_handlers = {
+    1: FourDSImporter.handle_visual_frame,
+    6: FourDSImporter.handle_dummy,
+    10: FourDSImporter.handle_bone,
+}
 
 
 class Mafia4ds_ImportDialog(types.Operator, io_utils.ImportHelper):
     "Import Mafia 4ds model."
-    bl_idname    = "mafia4ds.import_"
-    bl_text      = "Mafia (.4ds)"
-    bl_label     = "Import 4DS"
+    bl_idname = "mafia4ds.import_"
+    bl_text = "Mafia (.4ds)"
+    bl_label = "Import 4DS"
     filename_ext = ".4ds"
 
-    filter_glob : props.StringProperty(
-        default = "*.4ds",
-        options = {"HIDDEN"},
-        maxlen  = 255
+    filter_glob: props.StringProperty(
+        default="*.4ds",
+        options={"HIDDEN"},
+        maxlen=255
     )
 
     def execute(self, context):
         if len(GetPreferences().DataPath) == 0:
             ShowError("No game data path set!\n"
-                "\n"
-                "Go into Edit -> Preferences -> Addons,\n"
-                "search for Mafia 4ds addon, expand it,\n"
-                "click to Game Data Path selector\n"
-                "and choose appropriate directory.")
-            
+                      "\n"
+                      "Go into Edit -> Preferences -> Addons,\n"
+                      "search for Mafia 4ds addon, expand it,\n"
+                      "click to Game Data Path selector\n"
+                      "and choose appropriate directory.")
+
             return {'CANCELLED'}
-        
-        
-        exporter = Mafia4ds_Importer(self)
-        return exporter.Import(self.filepath)
+
+        importer = FourDSImporter(self.filepath)
+        try:
+            importer.import_file()
+        except ValueError as ve:
+            print(ve)
+            ShowError(ve)
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
 
 
 def ShowError(message):
     def draw(self, context):
         print(message)
-        
+
         for line in message.split("\n"):
-            self.layout.label(text = line)
-    
-    bpy.context.window_manager.popup_menu(draw, title = "Error", icon = "ERROR")
+            self.layout.label(text=line)
+
+    bpy.context.window_manager.popup_menu(draw, title="Error", icon="ERROR")
 
 
 def ShowWarning(message):
@@ -533,13 +354,13 @@ def ShowWarning(message):
 
 def GetPreferences():
     globalPreferences = bpy.context.preferences
-    addonPreferences  = globalPreferences.addons[__package__].preferences
-    
+    addonPreferences = globalPreferences.addons[__package__].preferences
+
     return addonPreferences
 
 
 def MenuImport(self, context):
-    self.layout.operator(Mafia4ds_ImportDialog.bl_idname, text = Mafia4ds_ImportDialog.bl_text)
+    self.layout.operator(Mafia4ds_ImportDialog.bl_idname, text=Mafia4ds_ImportDialog.bl_text)
 
 
 def register():

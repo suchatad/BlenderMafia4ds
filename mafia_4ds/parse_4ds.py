@@ -1,5 +1,4 @@
-from io_helper import *
-
+from . io_helper import *
 
 class MatProps:
     def __init__(self, flags):
@@ -259,6 +258,8 @@ class Mesh:
         self.vertex_groups = []  # indexed by lod id
         self.morph = None
         self.skin = None
+        self.dmin = None
+        self.dmax = None
 
     def read(self, reader):
         self.instance_id = read_ushort(reader)
@@ -280,8 +281,8 @@ class Mesh:
                 num_bones = read_ubyte(reader)
                 numLockedVerticesAll = read_uint(reader)  # ???
 
-                dmin = read_triplet(reader)
-                dmax = read_triplet(reader)
+                self.dmin = read_triplet(reader)
+                self.dmax = read_triplet(reader)
 
                 for bone_id in range(num_bones):
                     vertex_group = VertexGroup()
@@ -309,6 +310,8 @@ class VisualFrame:
             self.object = Mesh(skin=True, morph=False, billboard=False)
         elif self.visual_type == 0x03:
             self.object = Mesh(skin=True, morph=True, billboard=False)
+        elif self.visual_type == 0x05:
+            self.object = Mesh(skin=False, morph=True, billboard=False)
         else:
             raise ValueError('Unknown visual type {}.'.format(self.visual_type))
 
@@ -337,9 +340,11 @@ class Node:
             render_flags = read_ushort(reader)
 
         self.parent_id = read_ushort(reader)
+
         self.location = read_triplet(reader)
         self.scale = read_triplet(reader)
         self.rotation = read_quartet(reader)
+
         self.location = flip_axes(self.location)
         self.scale = flip_axes(self.scale)
         self.rotation = flip_axes(self.rotation)
