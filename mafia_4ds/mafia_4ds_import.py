@@ -81,7 +81,9 @@ class FourDSImporter:
         self.dummy_collection = None
 
         self.materials = []
-        self.objects = []
+
+        self.objects = []  # indexed by node id, only the first lod
+        self.object_map = {}  # indexed by node name, list of objects belonging to a node
 
         self.armature_obj = None
         self.armature_scale_factor = None
@@ -141,6 +143,7 @@ class FourDSImporter:
     def handle_general(self, node):
         me, obj = self.create_meshobject(node.name)
         self.apply_transform(node, obj)
+        return [obj]
 
     def handle_bone(self, node):
         # this one is tricky
@@ -208,6 +211,7 @@ class FourDSImporter:
 
         # switch back to object mode
         bpy.ops.object.mode_set(mode='OBJECT')
+        return [bo]
 
     def handle_dummy(self, node):
         me, obj = self.create_meshobject(node.name, collection=self.dummy_collection)
@@ -226,8 +230,10 @@ class FourDSImporter:
         # make it pretty
         obj.display_type = 'WIRE'
         obj.show_name = True
+        return [obj]
 
     def handle_visual_frame(self, node):
+        lod_objects = []
         for lod_id, lod in enumerate(node.frame.object.lods):
             if lod_id == 0:
                 indexed = True
@@ -238,6 +244,7 @@ class FourDSImporter:
 
             me, obj = self.create_meshobject(name, indexed=indexed)
             self.apply_transform(node, obj)
+            lod_objects.append(obj)
 
             # build mesh
             all_faces = []
@@ -277,11 +284,13 @@ class FourDSImporter:
             # keep this in mind when creating in-game models
             vertex_groups = node.frame.object.vertex_groups
             if vertex_groups:
-                vertex_counter = 0
-
                 # bone nodes indexed by bone id
                 bone_nodes = dict((node.frame.id, node) for node in self.fo.nodes if node.type == 10)
-                for bone_id, vertex_group in enumerate(vertex_groups):
+                num_bones = len(bone_nodes)
+                lod_vertex_groups = vertex_groups[lod_id*num_bones:(lod_id+1)*num_bones]
+
+                vertex_counter = 0
+                for bone_id, vertex_group in enumerate(lod_vertex_groups):
                     bone_node = bone_nodes[bone_id]
                     bvg = obj.vertex_groups.new(name=bone_node.name)
 
@@ -296,13 +305,17 @@ class FourDSImporter:
                 obj.hide_set(True)  # obj.hide_viewport broken?
                 obj.hide_render = True
 
+        return lod_objects
+
     def handle_node(self, node: FourDS.Node):
         if node.type in FourDSImporter.node_handlers:
             handler = FourDSImporter.node_handlers[node.type]
-            handler(self, node)
+            objs = handler(self, node)
         else:
-            self.handle_general(node)
+            objs = self.handle_general(node)
             ShowWarning("Skipping node {} of unimplemented type {}".format(node.name, node.type))
+
+        self.object_map[node.name] = objs
 
     def import_file(self):
         with open(self.filepath, "rb") as f:
@@ -323,9 +336,15 @@ class FourDSImporter:
 
         # set up the armature
         if self.armature_obj:
-            character_object = self.armature_obj.parent
-            arm_mod = character_object.modifiers.new(self.armature_obj.name, 'ARMATURE')
-            arm_mod.object = self.armature_obj
+            base_name = self.fo.nodes[self.base_id - 1].name
+            base_objects = self.object_map[base_name]
+
+            # add a modifier for every lod
+            for base_object in base_objects:
+                arm_mod = base_object.modifiers.new(self.armature_obj.name, 'ARMATURE')
+                arm_mod.object = self.armature_obj
+
+            # scale by common scale factor
             self.armature_obj.scale = self.armature_scale_factor
 
 
