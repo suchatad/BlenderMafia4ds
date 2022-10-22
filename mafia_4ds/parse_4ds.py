@@ -190,7 +190,7 @@ class Lod:  # level of detail
         raise NotImplementedError()
 
 
-class Morph:
+class ShapeKeys:
     def read(self, reader):
         numTargets = read_ubyte(reader)
 
@@ -247,17 +247,16 @@ class VertexGroup:
 
 
 class Mesh:
-    def __init__(self, skin=False, morph=False, billboard=False):
+    def __init__(self, weights=False, shape_keys=False, billboard=False):
         self.instance_id = None
-        self.has_skin = skin
-        self.has_morph = morph
+        self.has_weights = weights
+        self.has_shape_keys = shape_keys
         self.has_billboard = billboard
 
         self.lods = []
         self.armature = None
         self.vertex_groups = []  # indexed by lod id
-        self.morph = None
-        self.skin = None
+        self.shape_keys = None
         self.dmin = None
         self.dmax = None
 
@@ -275,7 +274,7 @@ class Mesh:
             lod.read(reader)
             self.lods.append(lod)
 
-        if self.has_skin:
+        if self.has_weights:
             for lod_id in range(num_lods):
                 lodMeshBones = []
                 num_bones = read_ubyte(reader)
@@ -289,9 +288,9 @@ class Mesh:
                     vertex_group.read(reader)
                     self.vertex_groups.append(vertex_group)
 
-        if self.has_morph:
-            self.morph = Morph()
-            self.morph.read(reader)
+        if self.has_shape_keys:
+            self.shape_keys = ShapeKeys()
+            self.shape_keys.read(reader)
 
     def write(self, writer):
         raise NotImplementedError()
@@ -305,13 +304,13 @@ class VisualFrame:
 
     def read(self, reader):
         if self.visual_type == 0x00 or self.visual_type == 0x01:
-            self.object = Mesh(skin=False, morph=False, billboard=False)
+            self.object = Mesh(weights=False, shape_keys=False, billboard=False)
         elif self.visual_type == 0x02:
-            self.object = Mesh(skin=True, morph=False, billboard=False)
+            self.object = Mesh(weights=True, shape_keys=False, billboard=False)
         elif self.visual_type == 0x03:
-            self.object = Mesh(skin=True, morph=True, billboard=False)
+            self.object = Mesh(weights=True, shape_keys=True, billboard=False)
         elif self.visual_type == 0x05:
-            self.object = Mesh(skin=False, morph=True, billboard=False)
+            self.object = Mesh(weights=False, shape_keys=True, billboard=False)
         else:
             raise ValueError('Unknown visual type {}.'.format(self.visual_type))
 
@@ -358,7 +357,7 @@ class Node:
             self.frame.read(reader)
         else:
             if self.type not in frame_types:
-                raise NotImplementedError('Not implemented frame '.format(self.type))
+                raise NotImplementedError('Not implemented frame type {}'.format(self.type))
 
             self.frame = frame_types[self.type]()
             self.frame.read(reader)
