@@ -87,6 +87,29 @@ class FourDSImporter:
         self.armature_scale_factor = None
         self.base_id = None
 
+    def parent_to_bone(self, obj, bone_name):
+        # simplest way to properly parent object to a bone is through operators
+        bpy.ops.object.select_all(action='DESELECT')
+        self.armature_obj.select_set(True)
+        bpy.context.view_layer.objects.active = self.armature_obj
+
+        bpy.ops.object.mode_set(mode='EDIT')
+        edit_bone = self.armature_obj.data.edit_bones[bone_name]
+        self.armature_obj.data.edit_bones.active = edit_bone
+        bone_matrix = Matrix(edit_bone.matrix)
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.select_all(action='DESELECT')
+
+        obj.select_set(True)
+        self.armature_obj.select_set(True)
+        bpy.context.view_layer.objects.active = self.armature_obj
+
+        bone_matrix_tr = Matrix.Translation(bone_matrix.to_translation())  # cut out the rotation part
+        obj.matrix_basis = self.armature_obj.parent.matrix_world @ bone_matrix_tr @ obj.matrix_basis
+
+        bpy.ops.object.parent_set(type='BONE')
+
     def apply_transform(self, node, obj):
         obj.location = node.location
         obj.scale = node.scale
@@ -98,29 +121,7 @@ class FourDSImporter:
             if isinstance(parent_obj, bpy.types.Object):
                 obj.parent = parent_obj
             elif isinstance(parent_obj, BoneObject):
-                # simplest way to properly parent object to a bone is through operators
-                bone_name = parent_obj.name
-
-                bpy.ops.object.select_all(action='DESELECT')
-                self.armature_obj.select_set(True)
-                bpy.context.view_layer.objects.active = self.armature_obj
-
-                bpy.ops.object.mode_set(mode='EDIT')
-                edit_bone = self.armature_obj.data.edit_bones[bone_name]
-                self.armature_obj.data.edit_bones.active = edit_bone
-                bone_matrix = Matrix(edit_bone.matrix)
-
-                bpy.ops.object.mode_set(mode='OBJECT')
-                bpy.ops.object.select_all(action='DESELECT')
-
-                obj.select_set(True)
-                self.armature_obj.select_set(True)
-                bpy.context.view_layer.objects.active = self.armature_obj
-
-                bone_matrix_tr = Matrix.Translation(bone_matrix.to_translation())  # cut out the rotation part
-                obj.matrix_basis = self.armature_obj.parent.matrix_world @ bone_matrix_tr @ obj.matrix_basis
-
-                bpy.ops.object.parent_set(type='BONE')
+                self.parent_to_bone(obj, parent_obj.name)
             else:
                 raise RuntimeError()
 
