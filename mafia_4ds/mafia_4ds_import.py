@@ -300,6 +300,11 @@ class FourDSImporter:
                     vertex_counter += vertex_group.num_locked_vertices + len(vertex_group.weights)
                     bvg.add(locked_vertices, 1.0, 'ADD')
 
+                # lock remaining vertices to the base bone
+                base_vg = obj.vertex_groups.new(name='base')
+                base_vertices = list(range(vertex_counter, len(lod.vertices)))
+                base_vg.add(base_vertices, 1.0, 'ADD')
+
             # hide secondary lods
             if lod_id > 0:
                 obj.hide_set(True)  # obj.hide_viewport broken?
