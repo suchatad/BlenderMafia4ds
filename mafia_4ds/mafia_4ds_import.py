@@ -65,6 +65,11 @@ def blen_create_material(material: FourDS.Material):
     return bma
 
 
+class BoneObject:  # placeholder for bones in the objects list
+    def __init__(self):
+        self.name = None
+
+
 class FourDSImporter:
     node_handlers = {}
 
@@ -89,7 +94,35 @@ class FourDSImporter:
         obj.rotation_quaternion = node.rotation
 
         if node.parent_id > 0:
-            obj.parent = self.objects[node.parent_id - 1]
+            parent_obj = self.objects[node.parent_id - 1]
+            if isinstance(parent_obj, bpy.types.Object):
+                obj.parent = parent_obj
+            elif isinstance(parent_obj, BoneObject):
+                # simplest way to properly parent object to a bone is through operators
+                bone_name = parent_obj.name
+
+                bpy.ops.object.select_all(action='DESELECT')
+                self.armature_obj.select_set(True)
+                bpy.context.view_layer.objects.active = self.armature_obj
+
+                bpy.ops.object.mode_set(mode='EDIT')
+                edit_bone = self.armature_obj.data.edit_bones[bone_name]
+                self.armature_obj.data.edit_bones.active = edit_bone
+                bone_matrix = Matrix(edit_bone.matrix)
+
+                bpy.ops.object.mode_set(mode='OBJECT')
+                bpy.ops.object.select_all(action='DESELECT')
+
+                obj.select_set(True)
+                self.armature_obj.select_set(True)
+                bpy.context.view_layer.objects.active = self.armature_obj
+
+                bone_matrix_tr = Matrix.Translation(bone_matrix.to_translation())  # cut out the rotation part
+                obj.matrix_basis = self.armature_obj.parent.matrix_world @ bone_matrix_tr @ obj.matrix_basis
+
+                bpy.ops.object.parent_set(type='BONE')
+            else:
+                raise RuntimeError()
 
     def create_meshobject(self, name, indexed=True, collection=None):
         me = bpy.data.meshes.new(name)
@@ -114,11 +147,6 @@ class FourDSImporter:
         # blender handles bones within a single armature object
         # for object orientation of the local axes comes from its transformation matrix
         # for bones Y axis is a vector from head to tail, X and Z depend on the bone roll
-
-        # create dummy obj
-        # todo: find a way to remove this block
-        me, obj = self.create_meshobject(node.name)
-        self.apply_transform(node, obj)
 
         bone_id = node.frame.id
         bone_matrix = Matrix(node.frame.matrix)
@@ -145,6 +173,10 @@ class FourDSImporter:
             bpy.ops.object.mode_set(mode='EDIT')
 
         bone = armature.edit_bones.new(node.name)
+
+        bo = BoneObject()
+        bo.name = node.name
+        self.objects.append(bo)
 
         # another (potential?) problem is bone scaling
         # scale factors other than 1.0 seem to appear only on root bones of skeletal branches
@@ -228,7 +260,6 @@ class FourDSImporter:
                     uv_layer.data[loop_index].uv = lod.uvs[vertex_index]
 
             slot_dict = {}  # maps material_id to slot_id
-            # face groups come in reverse order to material definitions
             for slot_id, face_group in enumerate(lod.face_groups):
                 bpy.ops.object.material_slot_add({"object": obj})
                 material_id = face_group.material_id
