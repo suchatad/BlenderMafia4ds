@@ -401,9 +401,3 @@ def register():
 def unregister():
     utils.unregister_class(Mafia4ds_ExportDialog)
     types.TOPBAR_MT_file_export.remove(MenuExport)
-
-
-if __name__ == "__main__":
-    register()
-
-    ops.mafia4ds.export('INVOKE_DEFAULT')

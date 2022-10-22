@@ -24,8 +24,8 @@ if "bpy" in locals():
         importlib.reload(mafia_4ds_mesh_properties)
     if "mafia_4ds_import" in locals():
         importlib.reload(mafia_4ds_import)
-    if "mafia_4ds_export" in locals():
-        importlib.reload(mafia_4ds_export)
+    #if "mafia_4ds_export" in locals():
+    #    importlib.reload(mafia_4ds_export)
 
 
 import bpy
@@ -34,7 +34,7 @@ from mafia_4ds import mafia_4ds_preferences
 from mafia_4ds import mafia_4ds_material_properties
 from mafia_4ds import mafia_4ds_mesh_properties
 from mafia_4ds import mafia_4ds_import
-from mafia_4ds import mafia_4ds_export
+#from mafia_4ds import mafia_4ds_export
 
 
 def register():
@@ -42,7 +42,7 @@ def register():
     mafia_4ds_material_properties.register()
     mafia_4ds_mesh_properties.register()
     mafia_4ds_import.register()
-    mafia_4ds_export.register()
+    #mafia_4ds_export.register()
 
 
 def unregister():
@@ -50,7 +50,7 @@ def unregister():
     mafia_4ds_material_properties.unregister()
     mafia_4ds_mesh_properties.unregister()
     mafia_4ds_import.unregister()
-    mafia_4ds_export.unregister()
+    #mafia_4ds_export.unregister()
 
 
 if __name__ == "__main__":
