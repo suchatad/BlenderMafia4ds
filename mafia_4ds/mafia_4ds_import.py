@@ -27,14 +27,14 @@ def blen_load_image(filepath: str):
 
 
 def srgb_to_linearrgb(color):
-    out=[]
+    out = []
     for c in color:
         if c < 0:
             oc = 0
         elif c < 0.04045:
-            oc = c/12.92
+            oc = c / 12.92
         else:
-            oc = ((c+0.055)/1.055)**2.4
+            oc = ((c + 0.055) / 1.055) ** 2.4
         out.append(oc)
     return tuple(out)
 
@@ -65,7 +65,7 @@ def blen_create_material(material: FourDS.Material):
 
             width, height = diffuse_image.size
             dw = width - 1
-            background_color = diffuse_image.pixels[dw*4:(dw+1)*4]  # color of the right-bottom corner pixel
+            background_color = diffuse_image.pixels[dw * 4:(dw + 1) * 4]  # color of the right-bottom corner pixel
 
             nodes = bma.node_tree.nodes
             links = bma.node_tree.links
@@ -227,7 +227,7 @@ class FourDSImporter:
             if node.scale != (1.0, 1.0, 1.0):
                 raise NotImplementedError('Non-uniform armature scaling is not implemented.')
 
-            parent_name = self.fo.nodes[node.parent_id-1].name
+            parent_name = self.fo.nodes[node.parent_id - 1].name
             bone.parent = armature.edit_bones[parent_name]
             bone.head = Vector(node.location) + bone.parent.head
 
@@ -314,21 +314,25 @@ class FourDSImporter:
                 # bone nodes indexed by bone id
                 bone_nodes = dict((node.frame.id, node) for node in self.fo.nodes if node.type == 10)
                 num_bones = len(bone_nodes)
-                lod_vertex_groups = vertex_groups[lod_id*num_bones:(lod_id+1)*num_bones]
+                lod_vertex_groups = vertex_groups[lod_id * num_bones:(lod_id + 1) * num_bones]
 
                 vertex_counter = 0
                 for bone_id, vertex_group in enumerate(lod_vertex_groups):
                     bone_node = bone_nodes[bone_id]
                     bvg = obj.vertex_groups.new(name=bone_node.name)
 
-                    # first set all weights to 1
+                    # first set all locked vertices to weight 1
                     locked_vertices = list(range(vertex_counter, vertex_group.num_locked_vertices +
-                                                 len(vertex_group.weights) + vertex_counter))
-                    vertex_counter += vertex_group.num_locked_vertices + len(vertex_group.weights)
+                                                 + vertex_counter))
+                    vertex_counter += vertex_group.num_locked_vertices
                     bvg.add(locked_vertices, 1.0, 'ADD')
 
-                    # then correct those that aren't locked
-
+                    # then add correct weights to the rest
+                    # todo: add proper overlapping
+                    weighted_vertices = list(range(vertex_counter, vertex_counter + len(vertex_group.weights)))
+                    vertex_counter += len(vertex_group.weights)
+                    for i, w in zip(weighted_vertices, vertex_group.weights):
+                        bvg.add((i,), w, 'REPLACE')
 
                 # lock remaining vertices to the base bone
                 base_vg = obj.vertex_groups.new(name='base')
