@@ -26,6 +26,19 @@ def blen_load_image(filepath: str):
     return image
 
 
+def srgb_to_linearrgb(color):
+    out=[]
+    for c in color:
+        if c < 0:
+            oc = 0
+        elif c < 0.04045:
+            oc = c/12.92
+        else:
+            oc = ((c+0.055)/1.055)**2.4
+        out.append(oc)
+    return tuple(out)
+
+
 def blen_create_material(material: FourDS.Material):
     bma = bpy.data.materials.new(material.diffuse_texture)
     bma_wrap = node_shader_utils.PrincipledBSDFWrapper(bma, is_readonly=False, use_nodes=True)
@@ -48,19 +61,33 @@ def blen_create_material(material: FourDS.Material):
             alpha_image = blen_load_image(material.alpha_texture)
             bma_wrap.alpha_texture.image = alpha_image
         elif material.use_alpha_color:
-            # not every color key is black !!!!
-            # this doesn't work on those that are not
-            # todo: make it work
             bma.blend_method = 'CLIP'
 
-            # rgb = diffuse_image.pixels[:3]  # color of the corner pixel
-            # print("pixels", rgb)
+            width, height = diffuse_image.size
+            dw = width - 1
+            background_color = diffuse_image.pixels[dw*4:(dw+1)*4]  # color of the right-bottom corner pixel
 
-            color_ramp = bma.node_tree.nodes.new("ShaderNodeValToRGB")
-            color_ramp.color_ramp.elements[1].position = 1e-5
+            nodes = bma.node_tree.nodes
+            links = bma.node_tree.links
 
-            bma.node_tree.links.new(texture_wrapper.node_image.outputs["Color"], color_ramp.inputs["Fac"])
-            bma.node_tree.links.new(color_ramp.outputs["Color"], bma_wrap.node_principled_bsdf.inputs["Alpha"])
+            rgb_node = nodes.new('ShaderNodeRGB')
+            rgb_node.outputs[0].default_value = srgb_to_linearrgb(background_color)
+
+            diff_node = nodes.new('ShaderNodeMixRGB')
+            diff_node.blend_type = 'DIFFERENCE'
+            diff_node.inputs['Fac'].default_value = 1.0
+            links.new(texture_wrapper.node_image.outputs['Color'], diff_node.inputs['Color1'])
+            links.new(rgb_node.outputs['Color'], diff_node.inputs['Color2'])
+
+            compare_node = nodes.new('ShaderNodeMath')
+            compare_node.operation = 'COMPARE'
+            links.new(diff_node.outputs[0], compare_node.inputs[0])
+            compare_node.inputs[1].default_value = 0.0
+            compare_node.inputs[2].default_value = 1e-3
+
+            invert_node = nodes.new('ShaderNodeInvert')
+            links.new(compare_node.outputs['Value'], invert_node.inputs['Color'])
+            links.new(invert_node.outputs['Color'], bma_wrap.node_principled_bsdf.inputs['Alpha'])
 
     return bma
 
@@ -294,11 +321,14 @@ class FourDSImporter:
                     bone_node = bone_nodes[bone_id]
                     bvg = obj.vertex_groups.new(name=bone_node.name)
 
-                    # sets all weights to 1
+                    # first set all weights to 1
                     locked_vertices = list(range(vertex_counter, vertex_group.num_locked_vertices +
                                                  len(vertex_group.weights) + vertex_counter))
                     vertex_counter += vertex_group.num_locked_vertices + len(vertex_group.weights)
                     bvg.add(locked_vertices, 1.0, 'ADD')
+
+                    # then correct those that aren't locked
+
 
                 # lock remaining vertices to the base bone
                 base_vg = obj.vertex_groups.new(name='base')
